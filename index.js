@@ -260,17 +260,15 @@ async function run() {
     app.post("/payments", async (req, res) => {
       const agreementPayment = req.body;
       console.log(agreementPayment);
-
       const result = await paymentCollection.insertOne(agreementPayment);
       res.send(result);
     });
 
-    //Coupon code api check
+    //Coupon code api check when apartment renter pay to rent then do the getcode button then fire this API
 
     app.post("/couponCode", async (req, res) => {
       const { couponCode } = req.body;
       const query = { code: couponCode };
-      console.log(query);
       const couponResult = await couponCollection.findOne(query);
       if (!couponResult) {
         return res.status(404).send({ message: "Invalid Coupon Code" });
@@ -282,6 +280,27 @@ async function run() {
       res.send({
         discount: couponResult.discount,
       });
+    });
+
+    // Get Coupon Api
+    app.get("/get-all-coupons", async (req, res) => {
+      const query = req.body;
+      const result = await couponCollection.find(query).toArray();
+      res.send(result);
+    });
+    // coupon Create Api by Admin
+
+    app.post("/createCoupon", async (req, res) => {
+      const couponQuery = req.body;
+      const result = await couponCollection.insertOne(couponQuery);
+      res.send(result);
+    });
+    //Coupon Delete Api
+    app.delete("/deleteCoupon/:id", async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const result = await couponCollection.deleteOne(query);
+      res.send(result);
     });
   } finally {
     // Ensures that the client will close when you finish/error
