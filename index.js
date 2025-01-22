@@ -295,6 +295,23 @@ async function run() {
       const result = await couponCollection.insertOne(couponQuery);
       res.send(result);
     });
+    // Update Coupon ApI
+    app.patch("/updateCoupon/:id", async (req, res) => {
+      const coupon = req.body;
+      const id = req.params.id;
+      const filter = { _id: new ObjectId(id) };
+      const updateDoc = {
+        $set: {
+          code: coupon.code,
+          discount: coupon.discount,
+          apartmentNo: coupon.apartmentNo,
+          validDate: coupon.validDate,
+          description: coupon.description,
+        },
+      };
+      const result = await couponCollection.updateOne(filter, updateDoc);
+      res.send(result);
+    });
     //Coupon Delete Api
     app.delete("/deleteCoupon/:id", async (req, res) => {
       const id = req.params.id;
