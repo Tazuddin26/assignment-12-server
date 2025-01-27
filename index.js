@@ -31,6 +31,7 @@ async function run() {
       .db("DreamRent")
       .collection("apartments");
     const userCollection = client.db("DreamRent").collection("users");
+    const memberCollection = client.db("DreamRent").collection("members");
     const paymentCollection = client.db("DreamRent").collection("payments");
     const couponCollection = client.db("DreamRent").collection("couponCode");
     const agreementCollection = client.db("DreamRent").collection("agreements");
@@ -78,20 +79,6 @@ async function run() {
 
     //Users related API
 
-    // app.get("/usersProfile/:email", async (req, res) => {
-    //   const email = req.query.email;
-    //   console.log("Received email in backend:", email);
-    //   // const query = { email: email };
-    //   if (!email) {
-    //     return res.status(400).send({ message: "user & email not found" });
-    //   }
-    //   const user = await userCollection.findOne({ email });
-    //   if (!user) {
-    //     return res.status(404).send({ message: "user not found" });
-    //   }
-    //   res.send(user);
-    // });
-
     app.get("/users", verifyToken, verifyAdmin, async (req, res) => {
       const result = await userCollection.find().toArray();
       res.send(result);
@@ -133,6 +120,10 @@ async function run() {
       const result = await userCollection.insertOne(newUser);
       res.send(result);
     });
+    app.get("/members", async (req, res) => {
+      const result = await memberCollection.find().toArray();
+      res.send(result);
+    });
 
     app.patch(
       "/users/member/:id",
@@ -146,28 +137,76 @@ async function run() {
             role: "member",
           },
         };
-        const result = await userCollection.updateOne(filter, updatedDoc);
-        res.send(result);
+        const userResult = await userCollection.updateOne(filter, updatedDoc);
+        if (
+          userResult.modifiedCount > 0 ||
+          (await userCollection.findOne(filter)).role === "member"
+        ) {
+          const user = await userCollection.findOne(filter);
+          const existingMember = await memberCollection.findOne({
+            email: user.email,
+          });
+          if (existingMember) {
+            return res.status(409).send({ message: "Member already exists" });
+          }
+          const member = {
+            name: user.name,
+            email: user.email,
+            role: "member",
+            createDate: new Date(),
+          };
+          const memberResult = await memberCollection.insertOne(member);
+          res.send({ userResult, memberResult });
+        } else {
+          return res.status(400).send({ message: "User role update failed" });
+        }
       }
     );
 
-    app.delete("/users/:id", async (req, res) => {
+    app.delete("/users/:id", verifyToken, verifyAdmin, async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
       const result = await userCollection.deleteOne(query);
       res.send(result);
     });
-
+    // Apartments API
     app.get("/apartments", async (req, res) => {
       const search = req.query.search || "";
       const min_rent = parseInt(req.query.min_rent) || 0;
       const max_rent = parseInt(req.query.max_rent) || 1000000;
+      const page = parseInt(req.query.page) || 1;
+      const limit = parseInt(req.query.limit) || 6;
+      const skip = (page - 1) * limit;
       let query = {
-        location: { $regex: search, $options: "i" },
+        description: { $regex: search, $options: "i" },
         "rentRange.min_rent": { $gte: min_rent },
         "rentRange.max_rent": { $lte: max_rent },
       };
-      const result = await apartmentsCollection.find(query).toArray();
+
+      const result = await apartmentsCollection
+        .find(query)
+        .skip(skip)
+        .limit(limit)
+        .toArray();
+      const totalItems = await apartmentsCollection.countDocuments(query);
+
+      res.send({
+        result,
+        totalItems,
+        totalPage: Math.ceil(totalItems / limit),
+        currentPage: page,
+      });
+    });
+
+    app.patch("/apartments/:id", async (req, res) => {
+      const id = req.params.id;
+      const filter = { _id: new ObjectId(id) };
+      const updateDoc = {
+        $set: {
+          status: "Occupied",
+        },
+      };
+      const result = await apartmentsCollection.updateOne(filter, updateDoc);
       res.send(result);
     });
 
@@ -191,8 +230,19 @@ async function run() {
       res.send(result);
     });
 
-    app.post("/agreement", async (req, res) => {
+    app.post("/agreement", verifyToken, async (req, res) => {
       const newAgreement = req.body;
+      const userEmail = newAgreement.userEmail;
+      const existsAgreement = await agreementCollection.findOne({
+        userEmail: userEmail,
+        status: { $ne: "cancelled" },
+      });
+      if (existsAgreement) {
+        return res.status(400).send({
+          message:
+            "You already have an active rental agreement. You cannot rent another apartment.",
+        });
+      }
       const result = await agreementCollection.insertOne(newAgreement);
       res.send(result);
     });
@@ -201,31 +251,24 @@ async function run() {
 
     app.patch("/agreements/:id", async (req, res) => {
       const { id } = req.params;
-      const { action } = req.body;
+      const { rented } = req.body;
       const filter = { _id: new ObjectId(id) };
       const agreement = await agreementCollection.findOne(filter);
       if (!agreement) {
         return res.status(404).send({ message: "Agreement not Found" });
       }
-      const actionUpdate = { status: "checked" };
-      if (action === "accept") {
-        actionUpdate.role = "member";
-      } else if (action === "reject") {
-        actionUpdate.role = "user";
+
+      const rentedUpdate = { rented: "checked" };
+      if (rented === "accept") {
+        rentedUpdate.status = "Occupied";
+      } else if (rented === "reject") {
+        rentedUpdate.status = "Available";
       }
       const updatedDoc = {
-        $set: actionUpdate,
+        $set: rentedUpdate,
       };
       const result = await agreementCollection.updateOne(filter, updatedDoc);
-      const userEmail = agreement.userEmail;
-      const userFilter = { email: userEmail };
-      console.log("user update", userFilter);
-      const userUpdate = {
-        $set: { role: action === "accept" ? "member" : "user" },
-      };
-      const userResult = await userCollection.updateOne(userFilter, userUpdate);
-      console.log(userResult);
-      res.send({ result, userResult });
+      res.send({ result });
     });
 
     app.delete("/requestCard/:id", async (req, res) => {
@@ -250,10 +293,16 @@ async function run() {
 
     // Payment Related API
 
-    app.get("/payments", async (req, res) => {
+    app.get("/payments", verifyToken, async (req, res) => {
       const email = req.query.email;
       const query = { email: email };
       const result = await paymentCollection.find(query).toArray();
+      res.send(result);
+    });
+
+    app.get("/allPayments", async (req, res) => {
+      // const query = req.body;
+      const result = await paymentCollection.find().toArray();
       res.send(result);
     });
 
@@ -264,9 +313,16 @@ async function run() {
       res.send(result);
     });
 
+    app.delete("/payments/:id", async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const result = await paymentCollection.deleteOne(query);
+      res.send(result);
+    });
+
     //Coupon code api check when apartment renter pay to rent then do the getcode button then fire this API
 
-    app.post("/couponCode", async (req, res) => {
+    app.post("/couponCode", verifyToken, verifyAdmin, async (req, res) => {
       const { couponCode } = req.body;
       const query = { code: couponCode };
       const couponResult = await couponCollection.findOne(query);
@@ -274,7 +330,8 @@ async function run() {
         return res.status(404).send({ message: "Invalid Coupon Code" });
       }
       const currentDate = new Date();
-      if (currentDate > couponResult.validDate) {
+      const validDate = new Date(couponResult.validDate);
+      if (currentDate > validDate) {
         return res.status(400).send({ message: "Coupon has Expired!" });
       }
       res.send({
@@ -313,11 +370,125 @@ async function run() {
       res.send(result);
     });
     //Coupon Delete Api
-    app.delete("/deleteCoupon/:id", async (req, res) => {
-      const id = req.params.id;
-      const query = { _id: new ObjectId(id) };
-      const result = await couponCollection.deleteOne(query);
-      res.send(result);
+    app.delete(
+      "/deleteCoupon/:id",
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        const id = req.params.id;
+        const query = { _id: new ObjectId(id) };
+        const result = await couponCollection.deleteOne(query);
+        res.send(result);
+      }
+    );
+
+    //Admin Stats
+    app.get("/admin-stats", verifyToken, verifyAdmin, async (req, res) => {
+      const users = await userCollection.estimatedDocumentCount();
+      const members = await memberCollection.estimatedDocumentCount();
+      const apartments = await apartmentsCollection.estimatedDocumentCount();
+      const coupons = await couponCollection.estimatedDocumentCount();
+      const payments = await paymentCollection.estimatedDocumentCount();
+      const announcements =
+        await announcementCollection.estimatedDocumentCount();
+      const agreementsCollection =
+        await agreementCollection.estimatedDocumentCount();
+      // const apartmentsResult = await apartmentsCollection
+      //   .aggregate([
+      //     {
+      //       $group: {
+      //         _id: null,
+      //         totalApartments: {
+      //           $sum: 1,
+      //         },
+      //       },
+      //     },
+      //   ])
+      //   .toArray();
+      // const allApartments = apartmentsResult[0]?.totalApartments || 0;
+      // // const availableApartment = apartmentsResult[0]?.totalApartments || 0
+      const pipeline = [
+        {
+          $lookup: {
+            from: "agreementCollection",
+            localField: "apartment_no",
+            foreignField: "apartmentNo",
+            as: "agreements",
+          },
+        },
+        {
+          $match: { agreements: { $size: 0 }, status: "Available" },
+        },
+        {
+          $group: {
+            _id: null,
+            availableCount: { $sum: 1 },
+          },
+        },
+      ];
+      const totalPipeline = [
+        {
+          $count: "totalApartments",
+        },
+      ];
+
+      const availableResult = await apartmentsCollection
+        .aggregate(pipeline)
+        .toArray();
+      const totalResult = await apartmentsCollection
+        .aggregate(totalPipeline)
+        .toArray();
+      const apartmentCount = availableResult[0]?.availableCount || 0;
+      const totalApartmentCount = totalResult[0]?.totalApartments || 0;
+
+      // agreements Percentage:
+      const agreementPipeline = [
+        {
+          $lookup: {
+            from: "agreementCollection",
+            localField: "apartment_no",
+            foreignField: "apartmentNo",
+            as: "agreements",
+          },
+        },
+        {
+          $match: {
+            agreements: { $size: 0 },
+            status: "Occupied",
+          },
+        },
+        {
+          $group: {
+            _id: null,
+            agreementCount: { $sum: 1 },
+          },
+        },
+      ];
+
+      const agreementResult = await apartmentsCollection
+        .aggregate(agreementPipeline)
+        .toArray();
+      const totalApartments = await apartmentsCollection.countDocuments();
+
+      const agreementCount = agreementResult[0]?.agreementCount || 0;
+      // console.log("Agreement Count:", agreementCount);
+
+      //  Percentage FindOut
+
+      const availablePercentage = (apartmentCount / totalApartmentCount) * 100;
+      const agreementPercentage = (agreementCount / totalApartmentCount) * 100;
+
+      res.send({
+        users,
+        // allApartments,
+        members,
+        coupons,
+        payments,
+        announcements,
+        availablePercentage: `${availablePercentage.toFixed(0)}%`,
+        agreementPercentage: `${agreementPercentage.toFixed(0)}%`,
+        totalApartments,
+      });
     });
   } finally {
     // Ensures that the client will close when you finish/error
