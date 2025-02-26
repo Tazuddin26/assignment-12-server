@@ -92,11 +92,11 @@ async function run() {
       res.send({ role: result?.role });
     });
 
-    app.get("/users/admin/:email", verifyToken, async (req, res) => {
+    app.get("/users/admin/:email",  async (req, res) => {
       const email = req.params.email;
-      if (email !== req.decoded.email) {
-        return res.status(403).send({ message: "Forbiddend Access" });
-      }
+      // if (email !== req.decoded.email) {
+      //   return res.status(403).send({ message: "Forbiddend Access" });
+      // }
       const query = { email: email };
       const user = await userCollection.findOne(query);
       let admin = false;
@@ -175,10 +175,10 @@ async function run() {
       const min_rent = parseInt(req.query.min_rent) || 0;
       const max_rent = parseInt(req.query.max_rent) || 1000000;
       const page = parseInt(req.query.page) || 1;
-      const limit = parseInt(req.query.limit) || 6;
+      const limit = parseInt(req.query.limit) || 8;
       const skip = (page - 1) * limit;
       let query = {
-        description: { $regex: search, $options: "i" },
+        apartment_size: { $regex: search, $options: "i" },
         "rentRange.min_rent": { $gte: min_rent },
         "rentRange.max_rent": { $lte: max_rent },
       };
@@ -322,8 +322,9 @@ async function run() {
 
     //Coupon code api check when apartment renter pay to rent then do the getcode button then fire this API
 
-    app.post("/couponCode", verifyToken, verifyAdmin, async (req, res) => {
+    app.post("/couponCode", async (req, res) => {
       const { couponCode } = req.body;
+      console.log(couponCode);
       const query = { code: couponCode };
       const couponResult = await couponCollection.findOne(query);
       if (!couponResult) {
@@ -381,7 +382,6 @@ async function run() {
         res.send(result);
       }
     );
-
     //Admin Stats
     app.get("/admin-stats", verifyToken, verifyAdmin, async (req, res) => {
       const users = await userCollection.estimatedDocumentCount();
